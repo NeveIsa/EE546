@@ -149,7 +149,7 @@ def mainloop(data, descentfn, lr, ntrials=100, tolerance=1e-6):
         avgtrainloss = sum(trainlosses)/ntrials
         avgtestloss = sum(testlosses)/ntrials
 
-        
+        print("learning rate:",lr)        
         print(descentfn.__name__, ": avgtrainloss : ", avgtrainloss)
         print(descentfn.__name__, ": avgtestloss : ", avgtestloss) 
  
