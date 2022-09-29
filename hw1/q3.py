@@ -1,3 +1,4 @@
+
 import numpy as np
 import pandas as pd
 from tqdm import tqdm
@@ -114,11 +115,11 @@ def trainloop(xs,ys,descentfn, lr, theta=[], niters=500):
 
     return loss(yshat,ys), theta
 
-def mainloop(data, descentfn, lr, ntrials=100, tolerance=1e-6):
+def mainloop(data, descentfn, lr, ntrials=100, acctolerance=None):
     trainlosses = []
     testlosses = []
     
-    if ntrials:
+    if not acctolerance:
         for run in tqdm(range(ntrials)):
             train,test = test_train_partition(data)
             # print(train.shape, test.shape)
@@ -156,37 +157,43 @@ def mainloop(data, descentfn, lr, ntrials=100, tolerance=1e-6):
         return avgtrainloss, avgtestloss
 
     else:
-        train,test = test_train_partition(data)
-        # print(train.shape, test.shape)
-
-        tn_patientID, tt_patiendID = train[:,0], test[:,0]
-        tn_labels, tt_labels = train[:,1], test[:,1]
-        tn_features, tt_features = train[:,2:], test[:,2:]
-
-        tn_normed_features,mean_feature = normalize(tn_features)
-        tn_aug_features = augment_features(tn_normed_features)
-
-        # normalize test features
-        tt_normed_features, mean_feature = normalize(tt_features)
-        tt_aug_features = augment_features(tt_normed_features)
-                
+        iterations = []
         
-        trainloss,theta = trainloop(tn_aug_features, tn_labels, descentfn, lr=lr, niters=1)    
-        acc = accuracy(tn_aug_features, tn_labels, theta)
+        pbar = tqdm(range(ntrials))
+        for i in pbar:
+            train,test = test_train_partition(data)
+            # print(train.shape, test.shape)
 
-        pbar = tqdm(range(100000))
-        for it in pbar:
-            trainloss,theta = trainloop(tn_aug_features, tn_labels, descentfn, lr=lr, theta=theta, niters=1)    
+            tn_patientID, tt_patiendID = train[:,0], test[:,0]
+            tn_labels, tt_labels = train[:,1], test[:,1]
+            tn_features, tt_features = train[:,2:], test[:,2:]
+
+            tn_normed_features,mean_feature = normalize(tn_features)
+            tn_aug_features = augment_features(tn_normed_features)
+
+            # normalize test features
+            tt_normed_features, mean_feature = normalize(tt_features)
+            tt_aug_features = augment_features(tt_normed_features)
+                    
+            
+            trainloss,theta = trainloop(tn_aug_features, tn_labels, descentfn, lr=lr, niters=1)    
             acc = accuracy(tn_aug_features, tn_labels, theta)
-            pbar.set_description(f"acc: {acc}")
-            if acc < tolerance: break        
 
-        return acc, it           
+            for it in range(100000):
+                trainloss,theta = trainloop(tn_aug_features, tn_labels, descentfn, lr=lr, theta=theta, niters=1)    
+                acc = accuracy(tn_aug_features, tn_labels, theta)
+                if acc < acctolerance: break        
 
+            iterations.append(it)
+            pbar.set_postfix({"itersreq":it})
+
+        avgiters = sum(iterations)/ntrials
+        print(f"avgiters:", avgiters)
+        return avgiters
 #### TRAINING HELPERS ####
 
     
 if __name__ == "__main__":
     data = pd.read_csv("wdbc.data", header=None).to_numpy()
-    accuracy, iterstaken = mainloop(data,gd, lr=0.0075, ntrials=0)
     avgtrainloss, avgtestloss = mainloop(data,gd, lr=0.0075)
+    avgiterstaken = mainloop(data,gd, lr=0.0075, ntrials=100, acctolerance=1e-6)
