@@ -1,15 +1,23 @@
-
+from colored import fore,back,style
 import numpy as np
 import pandas as pd
 from tqdm import tqdm
 import matplotlib.pyplot as plt
 import seaborn as sns
+from functools import partial
+import fire
 
-def normalize(features, mean_feature=None):
+from jax import grad as autograd
+import jax.numpy as jnp
+from jax import random
+from jax import jit
+from jax import device_put
+
+def normalize(features, mean_feature=[]):
     # print("Shape of features:",features.shape)
     features = features.T
     N = features.shape[1]
-    if not mean_feature: mean_feature = features.sum(axis=1)/N
+    if not len(mean_feature): mean_feature = features.sum(axis=1)/N
     centered_features = (features - np.outer(mean_feature,np.ones(N)))
     normed_features = centered_features @ np.diag(1/(np.diag(centered_features.T @ centered_features)**0.5))
     # print(np.diag(normed_features.T @ normed_features))
@@ -52,13 +60,17 @@ def loss(ys,yshat):
 
 
 def objective(xs,ys,theta, lambdaa=0.01):
-    obj = -np.dot(xs @ theta, ys)
+    xs=device_put(xs)
+    ys=device_put(ys)
+    theta=device_put(theta)
+    
+    obj = -jnp.dot(xs @ theta, ys)
 
-    e2tx = np.exp(xs@theta)
-    logged = np.log(1 + e2tx)
+    e2tx = jnp.exp(xs@theta)
+    logged = jnp.log(1 + e2tx)
     obj += sum(logged)
 
-    regularisation = lambdaa * np.dot(theta[1:], theta[1:])
+    regularisation = lambdaa * jnp.dot(theta[1:], theta[1:])
     obj += regularisation
 
     return obj
@@ -81,12 +93,10 @@ def gradient(xs,ys,theta, lambdaa=0.01):
     return grad
 
 def accuracy(xs,ys,theta, lambdaa=0.01):
-    grad = gradient(xs,ys,theta,lambdaa)
+    grad = gradient(xs,ys,theta,lambdaa) 
     obj = objective(xs,ys,theta,lambdaa)
-
     acc = np.dot(grad,grad)/ (1 + abs(obj))
     return acc
-
 
 #### OBJECTIVE FUNCTION AND GRADS ####
 
@@ -95,27 +105,46 @@ def accuracy(xs,ys,theta, lambdaa=0.01):
 
 def gd(xs,ys,theta,lr=0.01):
     grad = gradient(xs,ys,theta)
+    # print(agrad)
     theta = theta - lr * grad
-    return theta 
+    return theta
+
+def gdmomentum(xs, ys, theta, lr=0.01, eta=1):
+    try:
+        gdmomentum.lasttheta
+    except:
+        gdmomentum.lasttheta = theta
+        
+    grad = gradient(xs,ys,theta)
+    theta = theta - lr*grad + eta*(theta - gdmomentum.lasttheta)
+    gdmomentum.lasttheta = theta
+
+    return theta
 
 #### DESCENT METHODS ####
 
 
 #### TRAINING HELPERS ####
 
-def trainloop(xs,ys,descentfn, lr, theta=[], niters=500):
+def trainloop(xs,ys,descentfn, theta=[], niters=500):
     if len(theta)==0:
         theta = (np.random.rand(xs.shape[1]) - 0.5)*10
     
     for _ in range(niters):
-        theta = descentfn(xs,ys,theta,lr=lr)
+        theta = descentfn(xs,ys,theta)
         yshat = predict(xs,theta)
         # print(sum(theta))
         #print(loss(ys,yshat))
 
     return loss(yshat,ys), theta
 
-def mainloop(data, descentfn, lr, ntrials=100, acctolerance=None):
+def mainloop(data, descentfn, ntrials=100, acctolerance=None):
+    try:            
+        print(f"\n{back.PURPLE_3} {style.BOLD} Running:",descentfn.__name__,style.RESET)
+    except:
+        print(f"\n{back.PURPLE_3} {style.BOLD} Running:",descentfn.func.__name__,"with",descentfn.keywords,style.RESET)
+
+
     trainlosses = []
     testlosses = []
     
@@ -128,16 +157,16 @@ def mainloop(data, descentfn, lr, ntrials=100, acctolerance=None):
             tn_labels, tt_labels = train[:,1], test[:,1]
             tn_features, tt_features = train[:,2:], test[:,2:]
 
-            tn_normed_features,mean_feature = normalize(tn_features)
+            tn_normed_features,tn_mean_feature = normalize(tn_features)
             tn_aug_features = augment_features(tn_normed_features)
 
             # normalize test features
-            tt_normed_features,mean_feature = normalize(tt_features)
+            tt_normed_features,mean_feature = normalize(tt_features,tn_mean_feature)
             tt_aug_features = augment_features(tt_normed_features)
             
             
             # grad = gradient(tn_aug_features, tn_labels, np.random.rand(31))
-            trainloss,theta = trainloop(tn_aug_features, tn_labels, descentfn, lr=lr)
+            trainloss,theta = trainloop(tn_aug_features, tn_labels, descentfn)
 
 
             predtest = predict(tt_aug_features, theta)
@@ -150,10 +179,13 @@ def mainloop(data, descentfn, lr, ntrials=100, acctolerance=None):
         avgtrainloss = sum(trainlosses)/ntrials
         avgtestloss = sum(testlosses)/ntrials
 
-        print("learning rate:",lr)        
-        print(descentfn.__name__, ": avgtrainloss : ", avgtrainloss)
-        print(descentfn.__name__, ": avgtestloss : ", avgtestloss) 
- 
+        try:            
+            print(descentfn.__name__, ": avgtrainloss : ", avgtrainloss)
+            print(descentfn.__name__, ": avgtestloss : ", avgtestloss) 
+        except:
+            print(descentfn.func.__name__, ": avgtrainloss : ", avgtrainloss)
+            print(descentfn.func.__name__, ": avgtestloss : ", avgtestloss) 
+        
         return avgtrainloss, avgtestloss
 
     else:
@@ -172,15 +204,15 @@ def mainloop(data, descentfn, lr, ntrials=100, acctolerance=None):
             tn_aug_features = augment_features(tn_normed_features)
 
             # normalize test features
-            tt_normed_features, mean_feature = normalize(tt_features)
+            tt_normed_features, tn_mean_feature = normalize(tt_features)
             tt_aug_features = augment_features(tt_normed_features)
                     
             
-            trainloss,theta = trainloop(tn_aug_features, tn_labels, descentfn, lr=lr, niters=1)    
+            trainloss,theta = trainloop(tn_aug_features, tn_labels, descentfn, niters=1)    
             acc = accuracy(tn_aug_features, tn_labels, theta)
 
             for it in range(100000):
-                trainloss,theta = trainloop(tn_aug_features, tn_labels, descentfn, lr=lr, theta=theta, niters=1)    
+                trainloss,theta = trainloop(tn_aug_features, tn_labels, descentfn, theta=theta, niters=1)    
                 acc = accuracy(tn_aug_features, tn_labels, theta)
                 if acc < acctolerance: break        
 
@@ -192,8 +224,25 @@ def mainloop(data, descentfn, lr, ntrials=100, acctolerance=None):
         return avgiters
 #### TRAINING HELPERS ####
 
-    
-if __name__ == "__main__":
+
+
+def run(lr=0.01,eta=0.95,ntrials=10):
     data = pd.read_csv("wdbc.data", header=None).to_numpy()
-    avgtrainloss, avgtestloss = mainloop(data,gd, lr=0.0075)
-    avgiterstaken = mainloop(data,gd, lr=0.0075, ntrials=100, acctolerance=1e-6)
+
+    gd_setup = partial(gd, lr=lr)
+    gdmomentum_setup = partial(gdmomentum, lr=lr,eta=eta)
+    
+    avgtrainloss, avgtestloss = mainloop(data,gd_setup)
+
+    avgiterstaken = mainloop(data,gd_setup, ntrials=ntrials, acctolerance=1e-6)
+    avgiterstaken = mainloop(data,gdmomentum_setup, ntrials=ntrials, acctolerance=1e-6)
+
+
+    
+if __name__ == "__main__":    
+    # key = random.PRNGKey(1)
+    # xs = random.normal(key,(10,2))
+    # ys = random.normal(key,(10,))
+    # theta = random.normal(key,(2,))
+    # agrad = jit(autograd(objective, argnums=2))(xs,ys,theta, 0.01)
+    fire.Fire(run)
