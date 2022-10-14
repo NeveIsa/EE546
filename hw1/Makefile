@@ -2,6 +2,7 @@
 q3:
 	python q3.py
 
-reqs:
+deps:
 	pip install seaborn matplotlib pandas numpy
+	pip install -r reqs.txt
 
